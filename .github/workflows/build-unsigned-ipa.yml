@@ -54,12 +54,10 @@ jobs:
           set -euo pipefail
           node -v
           npm -v
-          which node
           ruby -v
           bundle exec pod --version
-          ruby -e "require 'json'; puts JSON::VERSION"
+          ruby -e "require 'json'; puts 'json=' + JSON::VERSION"
           xcodebuild -version
-          xcode-select -p
 
       - name: Install JS dependencies
         run: npm install
@@ -70,80 +68,122 @@ jobs:
       - name: Prebuild native iOS project (skip pods)
         run: npx expo prebuild --platform ios --clean --no-install
 
+      - name: Disable code signing in Podfile
+        run: |
+          python3 << 'PY'
+          from pathlib import Path
+          path = Path("ios/Podfile")
+          text = path.read_text()
+          snippet = """
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+        config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
+        config.build_settings['EXPANDED_CODE_SIGN_IDENTITY'] = ''
+        config.build_settings['EXPANDED_CODE_SIGN_IDENTITY_NAME'] = ''
+      end
+    end
+"""
+          needle = "react_native_post_install("
+          if "CODE_SIGNING_ALLOWED'] = 'NO'" in text:
+            print("already patched")
+          elif needle in text:
+            marker = "      :ccache_enabled => ccache_enabled?(podfile_properties),\n    )\n"
+            if marker in text:
+              text = text.replace(marker, marker + snippet, 1)
+              path.write_text(text)
+              print("patched Podfile post_install")
+            else:
+              raise SystemExit("Podfile marker not found for patch")
+          else:
+              raise SystemExit("Podfile missing react_native_post_install")
+          PY
+
       - name: Install CocoaPods dependencies
         id: pods
         run: |
           set -euo pipefail
           export PATH="$(dirname "$(which node)"):$PATH"
-          node --print "require.resolve('expo/package.json')"
-          node --print "require.resolve('react-native/package.json')"
-          ls -la ios
           set +e
           (cd ios && bundle exec pod install) 2>&1 | tee /tmp/pod-install.log
           POD_EXIT=${PIPESTATUS[0]}
           set -e
-          echo "pod_exit=$POD_EXIT"
           if [ "$POD_EXIT" -ne 0 ]; then
-            echo "::error::pod install failed — see /tmp/pod-install.log"
             exit "$POD_EXIT"
           fi
-          WS="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1 || true)"
-          echo "workspace=$WS"
-          test -n "$WS" && test -d "$WS"
+          test -d "$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
 
       - name: Publish pod failure details
         if: failure() && steps.pods.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
           {
             echo "### ❌ pod install failed"
-            echo
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            echo
             echo '```text'
-            tail -n 250 /tmp/pod-install.log || echo '(no log)'
+            tail -n 250 /tmp/pod-install.log || true
             echo '```'
-          } | tee /tmp/pod-comment.md
-          echo '## Pod install log' >> "$GITHUB_STEP_SUMMARY"
-          cat /tmp/pod-install.log >> "$GITHUB_STEP_SUMMARY" || true
-          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md \
-            || gh issue comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md \
-            || true
+          } > /tmp/pod-comment.md
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md || true
 
       - name: Detect workspace / scheme
         id: detect
         run: |
           set -euo pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
-          test -n "$WORKSPACE"
           xcodebuild -list -workspace "$WORKSPACE" -json > /tmp/xcode-list.json
           SCHEME="$(python3 -c 'import json; data=json.load(open("/tmp/xcode-list.json")); schemes=data.get("workspace",{}).get("schemes") or []; preferred=[s for s in schemes if s.lower()!="pods"]; print((preferred or schemes)[0])')"
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Using $WORKSPACE / $SCHEME"
 
-      - name: Archive without signing
+      - name: Build Release iphoneos (unsigned)
+        id: build
         run: |
           set -euo pipefail
           mkdir -p build
-          xcodebuild clean archive \
+          set +e
+          xcodebuild build \
             -workspace "${{ steps.detect.outputs.workspace }}" \
             -scheme "${{ steps.detect.outputs.scheme }}" \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$PWD/build/VORTEX.xcarchive" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY[sdk=iphoneos*]="" \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee /tmp/xcodebuild.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          exit "$BUILD_EXIT"
+
+      - name: Publish build failure details
+        if: failure() && steps.build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### ❌ xcodebuild failed"
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo '```text'
+            grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|ld:' /tmp/xcodebuild.log | tail -n 120 \
+              || tail -n 200 /tmp/xcodebuild.log
+            echo '```'
+          } > /tmp/build-comment.md
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment.md || true
 
       - name: Package unsigned IPA
         run: |
           set -euo pipefail
-          APP_PATH="$(find build/VORTEX.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -n 1)"
+          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          echo "APP_PATH=$APP_PATH"
           test -n "$APP_PATH"
+          test -d "$APP_PATH"
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
