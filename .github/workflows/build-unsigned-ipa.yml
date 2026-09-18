@@ -34,7 +34,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
 
       - name: Show toolchain
         run: |
@@ -44,7 +43,7 @@ jobs:
           xcode-select -p
 
       - name: Install JS dependencies
-        run: npm ci
+        run: npm install
 
       - name: Prebuild native iOS project
         env:
