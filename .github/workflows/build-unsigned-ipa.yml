@@ -1,0 +1,120 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches:
+      - main
+      - dskja-vortex-game-e9ea
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: Xcode configuration
+        required: false
+        default: Release
+      deployment_target:
+        description: Minimum iOS deployment target
+        required: false
+        default: "15.1"
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build VORTEX unsigned IPA
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Show toolchain
+        run: |
+          node -v
+          npm -v
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Prebuild native iOS project
+        env:
+          CI: "1"
+          EXPO_NO_TELEMETRY: "1"
+        run: npx expo prebuild --platform ios --clean --non-interactive
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: |
+          pod install --repo-update
+
+      - name: Detect workspace / scheme
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "No ios/*.xcworkspace after prebuild" >&2
+            exit 1
+          fi
+          xcodebuild -list -workspace "$WORKSPACE" -json > /tmp/xcode-list.json
+          SCHEME="$(python3 -c 'import json; data=json.load(open("/tmp/xcode-list.json")); schemes=data.get("workspace",{}).get("schemes") or []; preferred=[s for s in schemes if s.lower()!="pods"]; print((preferred or schemes)[0])')"
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Using workspace=$WORKSPACE scheme=$SCHEME"
+
+      - name: Archive without signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          CONFIGURATION="${{ github.event.inputs.configuration || 'Release' }}"
+          DEPLOYMENT_TARGET="${{ github.event.inputs.deployment_target || '15.1' }}"
+
+          xcodebuild clean archive \
+            -workspace "${{ steps.detect.outputs.workspace }}" \
+            -scheme "${{ steps.detect.outputs.scheme }}" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -archivePath "$PWD/build/VORTEX.xcarchive" \
+            IPHONEOS_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/VORTEX.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app in archive" >&2
+            find build -type d -maxdepth 5 || true
+            exit 1
+          fi
+          echo "Packaging $APP_PATH"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$APP_PATH" build/Payload/
+          (cd build && zip -qry VORTEX-unsigned.ipa Payload)
+          ls -lh build/VORTEX-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VORTEX-unsigned-ipa
+          path: build/VORTEX-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
