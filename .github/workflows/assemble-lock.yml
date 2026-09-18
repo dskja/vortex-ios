@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - '.lock-assemble/**'
+      - '.github/workflows/assemble-lock.yml'
   workflow_dispatch:
 jobs:
   assemble:
@@ -14,14 +15,28 @@ jobs:
       - name: Assemble package-lock.json
         run: |
           set -euo pipefail
+          # MCP/push_files corrupted gz_01 offset 791 (v->p); restore before decode
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.lock-assemble/gz_01.b64')
+          b = bytearray(p.read_bytes())
+          assert len(b) == 15000
+          if b[791:800] == b'pwH7kCYTk':
+              b[791] = ord('v')
+              p.write_bytes(b)
+              print('fixed gz_01 corruption at offset 791')
+          elif b[791:800] != b'vwH7kCYTk':
+              raise SystemExit(f'unexpected gz_01 context at 791: {b[780:810]!r}')
+          PY
           cat .lock-assemble/gz_*.b64 | base64 -d | gzip -d > package-lock.json
           python3 - <<'PY'
-          import json
-          data = json.load(open("package-lock.json"))
-          text = open("package-lock.json").read()
-          assert "expo-av" not in text
-          assert data["name"] == "vortex-ios"
-          print("package-lock.json ok", len(text))
+          import hashlib, json
+          text = open('package-lock.json').read()
+          assert 'expo-av' not in text
+          assert json.loads(text)['name'] == 'vortex-ios'
+          digest = hashlib.sha256(text.encode()).hexdigest()
+          assert digest == '8899e3618be8e78e2f7183f80f7725649239e04204075971d81c497db289e6f5', digest
+          print('package-lock.json ok', len(text), digest)
           PY
           rm -rf .lock-assemble
           git config user.name "github-actions[bot]"
