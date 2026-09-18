@@ -27,6 +27,7 @@ jobs:
       LC_ALL: en_US.UTF-8
       EXPO_NO_TELEMETRY: "1"
       CI: "1"
+      EXPO_USE_PRECOMPILED_MODULES: "0"
 
     steps:
       - name: Checkout
@@ -56,6 +57,7 @@ jobs:
           which node
           ruby -v
           bundle exec pod --version
+          ruby -e "require 'json'; puts JSON::VERSION"
           xcodebuild -version
           xcode-select -p
 
