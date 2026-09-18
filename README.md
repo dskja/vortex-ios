@@ -1,34 +1,40 @@
 # VORTEX
 
-Ein iOS Arcade-Skill-Game: Du orbitierst um den Kern. **Tippe**, um die Richtung umzukehren. Schlüpfe durch die Lücken der eingehenden Ringe. Perfekte Treffer bauen Combos auf.
+Native iOS Arcade-Skill-Game. Kein Expo Go — echte App-Binary / **unsigned IPA** via GitHub Actions.
 
-## Warum es süchtig macht
+Du orbitierst um den Kern. **Tippen** kehrt die Richtung um. Schlüpfe durch Lücken. Perfects stacken Combos, 5 Perfects → **FEVER**. Shards freischalten Skins & Modi.
 
-- Ein-Finger-Steuerung, Runs in 30–90 Sekunden
-- Skill-Ceiling: Timing + Antizipation, nicht Glück
-- Combo-Multiplier und „noch einmal“-Game-Over-Momente
-- Haptik auf dem iPhone, Highscore lokal gespeichert
+## Modi
 
-## Spielen
+| Modus | Was |
+|-------|-----|
+| **CLASSIC** | Endlos, reine Präzision |
+| **HYPER** | Schneller, enger, 2× Score |
+| **MIRROR** | Zwei Orbs, beide müssen klar kommen |
+| **GAUNTLET** | 20 Wellen inkl. Boss-Ringe |
+
+Extra: Dual-/Spinner-/Pulse-/Boss-Ringe, Near-Misses, Shard-Pickups, Hangar-Skins, Achievements, Ranks.
+
+## Unsigned IPA (GitHub Actions)
+
+Workflow: `.github/workflows/build-unsigned-ipa.yml`
+
+1. Push auf `main` / `dskja-vortex-game-e9ea` **oder** Actions → **Build Unsigned IPA** → Run workflow
+2. Job läuft auf `macos-14`: `expo prebuild` → CocoaPods → `xcodebuild archive` **ohne Signing** → zippt `VORTEX-unsigned.ipa`
+3. Artifact **VORTEX-unsigned-ipa** herunterladen
+
+Die IPA ist **unsigned**. Signieren/Installieren z. B. mit Sideloadly, AltStore, TrollStore (je nach Gerät/iOS).
+
+## Lokal (Mac, native)
 
 ```bash
-npm install
-npx expo start
+npm ci
+npx expo prebuild --platform ios
+npx expo run:ios
 ```
 
-- iPhone: [Expo Go](https://expo.dev/go) öffnen und QR-Code scannen
-- Web-Preview: `npx expo start --web`
-- Native iOS-Build (Mac): `npx expo prebuild` dann in Xcode öffnen / EAS Build
+Oder Xcode: `ios/*.xcworkspace` öffnen.
 
 ## Stack
 
-Expo (React Native) · TypeScript · SVG-Renderer · AsyncStorage · Haptics
-
-## Steuerung
-
-| Aktion | Effekt |
-|--------|--------|
-| Tippen während des Spiels | Orbit-Richtung umkehren |
-| Lücke treffen | +1 Punkt |
-| Lücken-Mitte (Perfect) | Combo + Multiplier |
-| Ring ohne Lücke | Game Over |
+Expo bare prebuild · React Native · TypeScript · Sprite-ähnlicher SVG-Renderer · AsyncStorage Meta-Progression · Haptics
