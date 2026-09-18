@@ -12,19 +12,24 @@ on:
         description: Xcode configuration
         required: false
         default: Release
-      deployment_target:
-        description: Minimum iOS deployment target
-        required: false
-        default: "15.1"
 
 permissions:
   contents: read
+
+concurrency:
+  group: unsigned-ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-unsigned-ipa:
     name: Build VORTEX unsigned IPA
     runs-on: macos-14
     timeout-minutes: 90
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
+      EXPO_NO_TELEMETRY: "1"
+      CI: "1"
 
     steps:
       - name: Checkout
@@ -37,10 +42,14 @@ jobs:
 
       - name: Show toolchain
         run: |
+          set -euo pipefail
           node -v
           npm -v
+          which node
           xcodebuild -version
           xcode-select -p
+          pod --version || gem list cocoapods || true
+          echo "LANG=$LANG LC_ALL=$LC_ALL"
 
       - name: Install JS dependencies
         run: npm install
@@ -48,24 +57,47 @@ jobs:
       - name: Generate app icons
         run: python3 scripts/gen_assets.py
 
-      - name: Prebuild native iOS project
-        env:
-          CI: "1"
-          EXPO_NO_TELEMETRY: "1"
-        run: npx expo prebuild --platform ios --clean
+      - name: Prebuild native iOS project (skip pods)
+        run: npx expo prebuild --platform ios --clean --no-install
 
-      - name: Install CocoaPods
-        working-directory: ios
-        run: pod install --repo-update
+      - name: Install CocoaPods dependencies
+        id: pods
+        run: |
+          set -euo pipefail
+          export PATH="$(dirname "$(which node)"):/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "node=$(which node) $(node -v)"
+          echo "pod=$(command -v pod || true)"
+          pod --version
+          node --print "require.resolve('expo/package.json')"
+          node --print "require.resolve('react-native/package.json')"
+          ls -la ios
+          # Run from repo root — Expo's helper resolves the ios/ Podfile correctly
+          npx --yes pod-install
+          WS="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1 || true)"
+          echo "workspace=$WS"
+          test -n "$WS"
+          test -d "$WS"
+          ls -la ios
+
+      - name: Upload pod failure logs
+        if: failure() && steps.pods.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pod-install-debug
+          path: |
+            ios/Podfile
+            ios/Podfile.lock
+            ios/Podfile.properties.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Detect workspace / scheme
         id: detect
-        shell: bash
         run: |
           set -euo pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
           if [ -z "$WORKSPACE" ]; then
-            echo "No ios/*.xcworkspace after prebuild" >&2
+            echo "No ios/*.xcworkspace after pod install" >&2
             ls -la ios || true
             exit 1
           fi
@@ -76,12 +108,10 @@ jobs:
           echo "Using workspace=$WORKSPACE scheme=$SCHEME"
 
       - name: Archive without signing
-        shell: bash
         run: |
           set -euo pipefail
           mkdir -p build
           CONFIGURATION="${{ github.event.inputs.configuration || 'Release' }}"
-          DEPLOYMENT_TARGET="${{ github.event.inputs.deployment_target || '15.1' }}"
 
           xcodebuild clean archive \
             -workspace "${{ steps.detect.outputs.workspace }}" \
@@ -89,7 +119,6 @@ jobs:
             -configuration "$CONFIGURATION" \
             -sdk iphoneos \
             -archivePath "$PWD/build/VORTEX.xcarchive" \
-            IPHONEOS_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -97,7 +126,6 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER=""
 
       - name: Package unsigned IPA
-        shell: bash
         run: |
           set -euo pipefail
           APP_PATH="$(find build/VORTEX.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -n 1)"
