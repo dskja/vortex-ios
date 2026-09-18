@@ -45,16 +45,18 @@ jobs:
       - name: Install JS dependencies
         run: npm install
 
+      - name: Generate app icons
+        run: python3 scripts/gen_assets.py
+
       - name: Prebuild native iOS project
         env:
           CI: "1"
           EXPO_NO_TELEMETRY: "1"
-        run: npx expo prebuild --platform ios --clean --non-interactive
+        run: npx expo prebuild --platform ios --clean
 
       - name: Install CocoaPods
         working-directory: ios
-        run: |
-          pod install --repo-update
+        run: pod install --repo-update
 
       - name: Detect workspace / scheme
         id: detect
@@ -64,6 +66,7 @@ jobs:
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
           if [ -z "$WORKSPACE" ]; then
             echo "No ios/*.xcworkspace after prebuild" >&2
+            ls -la ios || true
             exit 1
           fi
           xcodebuild -list -workspace "$WORKSPACE" -json > /tmp/xcode-list.json
