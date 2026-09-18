@@ -20,7 +20,7 @@ Extra: Dual-/Spinner-/Pulse-/Boss-Ringe, Near-Misses, Shard-Pickups, Hangar-Skin
 Workflow: `.github/workflows/build-unsigned-ipa.yml`
 
 1. Push auf `main` / `dskja-vortex-game-e9ea` **oder** Actions → **Build Unsigned IPA** → Run workflow
-2. Job läuft auf `macos-14`: `expo prebuild` → CocoaPods → `xcodebuild archive` **ohne Signing** → zippt `VORTEX-unsigned.ipa`
+2. Job läuft auf `macos-26` + **Xcode 26.4.1** (Expo SDK 57 / ExpoModulesJSI): `expo prebuild` → CocoaPods → `xcodebuild build` **ohne Signing** → zippt `VORTEX-unsigned.ipa`
 3. Artifact **VORTEX-unsigned-ipa** herunterladen
 
 Die IPA ist **unsigned**. Signieren/Installieren z. B. mit Sideloadly, AltStore, TrollStore (je nach Gerät/iOS).

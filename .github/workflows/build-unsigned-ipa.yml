@@ -20,7 +20,8 @@ concurrency:
 jobs:
   build-unsigned-ipa:
     name: Build VORTEX unsigned IPA
-    runs-on: macos-15
+    # Expo SDK 57 / ExpoModulesJSI needs Swift 6.2+ → Xcode ≥ 26.4
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       LANG: en_US.UTF-8
@@ -33,10 +34,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16.2
+      - name: Select Xcode 26.4.1
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.2"
+          # Expo SDK 57 minimum; avoid 26.5 ExpoModulesJSI regressions
+          xcode-version: "26.4.1"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -58,6 +60,8 @@ jobs:
           bundle exec pod --version
           ruby -e "require 'json'; puts 'json=' + JSON::VERSION"
           xcodebuild -version
+          xcrun swiftc --version | head -n 2
+          xcodebuild -showsdks | grep -E 'iOS|iphone' || true
 
       - name: Install JS dependencies
         run: npm install
@@ -116,6 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
+          # Avoid SPM plugin / macro fingerprint prompts on CI
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES || true
           defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES || true
           set +e
@@ -130,7 +135,7 @@ jobs:
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             ONLY_ACTIVE_ARCH=NO \
@@ -138,6 +143,15 @@ jobs:
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
           exit "$BUILD_EXIT"
+
+      - name: Upload xcodebuild log
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: /tmp/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Publish build failure details
         if: failure() && steps.build.outcome == 'failure'
@@ -148,9 +162,9 @@ jobs:
             echo "### ❌ xcodebuild failed"
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo '```text'
-            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ld:|scheme' /tmp/xcodebuild.log || true) | tail -n 150
+            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ExpoModulesJSI|ld:|❌|Swift tools version' /tmp/xcodebuild.log || true) | tail -n 200
             echo '--- tail ---'
-            tail -n 100 /tmp/xcodebuild.log
+            tail -n 120 /tmp/xcodebuild.log
             echo '```'
           } > /tmp/build-comment.md
           gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment.md || true
