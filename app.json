@@ -2,7 +2,7 @@
   "expo": {
     "name": "VORTEX",
     "slug": "vortex-ios",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.dskja.vortex",
-      "buildNumber": "3",
+      "buildNumber": "4",
       "deploymentTarget": "16.4",
       "infoPlist": {
         "UIStatusBarStyle": "UIStatusBarStyleLightContent",
@@ -35,8 +35,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font",
-      "expo-av"
+      "expo-font"
     ]
   }
 }
