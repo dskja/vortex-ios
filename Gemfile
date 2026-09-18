@@ -1,4 +1,5 @@
 source 'https://rubygems.org'
 
-gem 'cocoapods', '1.15.2'
+gem 'cocoapods', '~> 1.16.2'
+gem 'xcodeproj', '>= 1.27.0'
 gem 'activesupport', '>= 6.1.7.5', '!= 7.1.0'
