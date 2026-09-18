@@ -27,7 +27,7 @@ jobs:
       LC_ALL: en_US.UTF-8
       EXPO_NO_TELEMETRY: "1"
       CI: "1"
-      EXPO_USE_PRECOMPILED_MODULES: "0"
+      EXPO_USE_PRECOMPILED_MODULES: "1"
 
     steps:
       - name: Checkout
@@ -105,10 +105,11 @@ jobs:
           set -euo pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
           xcodebuild -list -workspace "$WORKSPACE" -json > /tmp/xcode-list.json
-          SCHEME="$(python3 -c 'import json; data=json.load(open("/tmp/xcode-list.json")); schemes=data.get("workspace",{}).get("schemes") or []; preferred=[s for s in schemes if s.lower()!="pods"]; print((preferred or schemes)[0])')"
+          SCHEME="$(python3 scripts/pick_xcode_scheme.py)"
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
-          echo "Using $WORKSPACE / $SCHEME"
+          echo "Using workspace=$WORKSPACE scheme=$SCHEME"
+          test "$SCHEME" = "VORTEX"
 
       - name: Build Release iphoneos (unsigned)
         id: build
@@ -147,9 +148,9 @@ jobs:
             echo "### ❌ xcodebuild failed"
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo '```text'
-            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ld:' /tmp/xcodebuild.log || true) | tail -n 150
+            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ld:|scheme' /tmp/xcodebuild.log || true) | tail -n 150
             echo '--- tail ---'
-            tail -n 80 /tmp/xcodebuild.log
+            tail -n 100 /tmp/xcodebuild.log
             echo '```'
           } > /tmp/build-comment.md
           gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment.md || true
