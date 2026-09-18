@@ -7,14 +7,11 @@ on:
       - dskja-vortex-game-e9ea
   pull_request:
   workflow_dispatch:
-    inputs:
-      configuration:
-        description: Xcode configuration
-        required: false
-        default: Release
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: unsigned-ipa-${{ github.ref }}
@@ -40,16 +37,22 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Setup Ruby + CocoaPods
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
       - name: Show toolchain
         run: |
           set -euo pipefail
           node -v
           npm -v
           which node
+          ruby -v
+          bundle exec pod --version
           xcodebuild -version
           xcode-select -p
-          pod --version || gem list cocoapods || true
-          echo "LANG=$LANG LC_ALL=$LC_ALL"
 
       - name: Install JS dependencies
         run: npm install
@@ -64,59 +67,63 @@ jobs:
         id: pods
         run: |
           set -euo pipefail
-          export PATH="$(dirname "$(which node)"):/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "node=$(which node) $(node -v)"
-          echo "pod=$(command -v pod || true)"
-          pod --version
+          export PATH="$(dirname "$(which node)"):$PATH"
           node --print "require.resolve('expo/package.json')"
           node --print "require.resolve('react-native/package.json')"
           ls -la ios
-          # Run from repo root — Expo's helper resolves the ios/ Podfile correctly
-          npx --yes pod-install
+          set +e
+          (cd ios && bundle exec pod install) 2>&1 | tee /tmp/pod-install.log
+          POD_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "pod_exit=$POD_EXIT"
+          if [ "$POD_EXIT" -ne 0 ]; then
+            echo "::error::pod install failed — see /tmp/pod-install.log"
+            exit "$POD_EXIT"
+          fi
           WS="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1 || true)"
           echo "workspace=$WS"
-          test -n "$WS"
-          test -d "$WS"
-          ls -la ios
+          test -n "$WS" && test -d "$WS"
 
-      - name: Upload pod failure logs
+      - name: Publish pod failure details
         if: failure() && steps.pods.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pod-install-debug
-          path: |
-            ios/Podfile
-            ios/Podfile.lock
-            ios/Podfile.properties.json
-          if-no-files-found: warn
-          retention-days: 7
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### ❌ pod install failed"
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```text'
+            tail -n 250 /tmp/pod-install.log || echo '(no log)'
+            echo '```'
+          } | tee /tmp/pod-comment.md
+          echo '## Pod install log' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/pod-install.log >> "$GITHUB_STEP_SUMMARY" || true
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md \
+            || gh issue comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md \
+            || true
 
       - name: Detect workspace / scheme
         id: detect
         run: |
           set -euo pipefail
           WORKSPACE="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
-          if [ -z "$WORKSPACE" ]; then
-            echo "No ios/*.xcworkspace after pod install" >&2
-            ls -la ios || true
-            exit 1
-          fi
+          test -n "$WORKSPACE"
           xcodebuild -list -workspace "$WORKSPACE" -json > /tmp/xcode-list.json
           SCHEME="$(python3 -c 'import json; data=json.load(open("/tmp/xcode-list.json")); schemes=data.get("workspace",{}).get("schemes") or []; preferred=[s for s in schemes if s.lower()!="pods"]; print((preferred or schemes)[0])')"
           echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
-          echo "Using workspace=$WORKSPACE scheme=$SCHEME"
 
       - name: Archive without signing
         run: |
           set -euo pipefail
           mkdir -p build
-          CONFIGURATION="${{ github.event.inputs.configuration || 'Release' }}"
-
           xcodebuild clean archive \
             -workspace "${{ steps.detect.outputs.workspace }}" \
             -scheme "${{ steps.detect.outputs.scheme }}" \
-            -configuration "$CONFIGURATION" \
+            -configuration Release \
             -sdk iphoneos \
             -archivePath "$PWD/build/VORTEX.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
@@ -129,12 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           APP_PATH="$(find build/VORTEX.xcarchive/Products/Applications -maxdepth 1 -name '*.app' | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            echo "No .app in archive" >&2
-            find build -type d -maxdepth 5 || true
-            exit 1
-          fi
-          echo "Packaging $APP_PATH"
+          test -n "$APP_PATH"
           rm -rf build/Payload
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
