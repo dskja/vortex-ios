@@ -115,6 +115,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
+          defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES || true
+          defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES || true
           set +e
           xcodebuild build \
             -workspace "${{ steps.detect.outputs.workspace }}" \
@@ -123,11 +125,14 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$PWD/build/DerivedData" \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY="-" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            ONLY_ACTIVE_ARCH=NO \
             2>&1 | tee /tmp/xcodebuild.log
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
@@ -142,8 +147,9 @@ jobs:
             echo "### ❌ xcodebuild failed"
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo '```text'
-            grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|ld:' /tmp/xcodebuild.log | tail -n 120 \
-              || tail -n 200 /tmp/xcodebuild.log
+            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ld:' /tmp/xcodebuild.log || true) | tail -n 150
+            echo '--- tail ---'
+            tail -n 80 /tmp/xcodebuild.log
             echo '```'
           } > /tmp/build-comment.md
           gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment.md || true
