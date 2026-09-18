@@ -72,8 +72,10 @@ jobs:
       - name: Prebuild native iOS project (skip pods)
         run: npx expo prebuild --platform ios --clean --no-install
 
-      - name: Disable code signing in Podfile
-        run: python3 scripts/patch_podfile_unsigned.py
+      - name: Disable code signing (Podfile + app project)
+        run: |
+          python3 scripts/patch_podfile_unsigned.py
+          python3 scripts/patch_app_unsigned.py
 
       - name: Install CocoaPods dependencies
         id: pods
@@ -98,10 +100,37 @@ jobs:
             echo "### ❌ pod install failed"
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo '```text'
-            tail -n 250 /tmp/pod-install.log || true
+            tail -n 80 /tmp/pod-install.log || true
             echo '```'
           } > /tmp/pod-comment.md
           gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/pod-comment.md || true
+
+      - name: Prebuild ExpoModulesJSI (iphoneos)
+        id: jsi
+        run: |
+          set -euo pipefail
+          export PATH="$(dirname "$(which node)"):$PATH"
+          JSI_SCRIPT="$(find node_modules -path '*/expo-modules-jsi/apple/scripts/build-xcframework.sh' | head -n 1)"
+          test -n "$JSI_SCRIPT"
+          echo "JSI_SCRIPT=$JSI_SCRIPT"
+          set +e
+          (
+            cd "$(dirname "$JSI_SCRIPT")/.."
+            export PODS_ROOT="$GITHUB_WORKSPACE/ios/Pods"
+            export PLATFORM_NAME=iphoneos
+            export DEVELOPER_DIR="$(xcode-select -p)"
+            bash "./scripts/build-xcframework.sh"
+          ) 2>&1 | tee /tmp/expo-modules-jsi.log
+          JSI_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "$JSI_EXIT" -ne 0 ]; then
+            echo "::error::ExpoModulesJSI prebuild failed (exit $JSI_EXIT)"
+            # Emit first errors as annotations (readable via Checks API)
+            grep -E 'error:|fatal error|BUILD FAILED|Swift tools|did not produce|❌' /tmp/expo-modules-jsi.log \
+              | head -n 40 \
+              | while IFS= read -r line; do echo "::error::$line"; done || true
+            exit "$JSI_EXIT"
+          fi
 
       - name: Detect workspace / scheme
         id: detect
@@ -120,7 +149,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          # Avoid SPM plugin / macro fingerprint prompts on CI
           defaults write com.apple.dt.Xcode IDESkipPackagePluginFingerprintValidatation -bool YES || true
           defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES || true
           set +e
@@ -142,32 +170,52 @@ jobs:
             2>&1 | tee /tmp/xcodebuild.log
           BUILD_EXIT=${PIPESTATUS[0]}
           set -e
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "::error::xcodebuild failed (exit $BUILD_EXIT)"
+            grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ExpoModulesJSI|PhaseScriptExecution|Swift tools version|❌' /tmp/xcodebuild.log \
+              | head -n 60 \
+              | while IFS= read -r line; do echo "::error::$line"; done || true
+          fi
           exit "$BUILD_EXIT"
 
-      - name: Upload xcodebuild log
-        if: failure() && steps.build.outcome == 'failure'
+      - name: Upload failure logs
+        if: failure() && (steps.build.outcome == 'failure' || steps.jsi.outcome == 'failure')
         uses: actions/upload-artifact@v4
         with:
-          name: xcodebuild-log
-          path: /tmp/xcodebuild.log
+          name: ios-build-failure-logs
+          path: |
+            /tmp/xcodebuild.log
+            /tmp/expo-modules-jsi.log
           if-no-files-found: ignore
           retention-days: 7
 
       - name: Publish build failure details
-        if: failure() && steps.build.outcome == 'failure'
+        if: failure() && (steps.build.outcome == 'failure' || steps.jsi.outcome == 'failure')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           {
-            echo "### ❌ xcodebuild failed"
+            echo "### ❌ iOS build failed"
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
             echo '```text'
-            (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ExpoModulesJSI|ld:|❌|Swift tools version' /tmp/xcodebuild.log || true) | tail -n 200
-            echo '--- tail ---'
-            tail -n 120 /tmp/xcodebuild.log
+            if [ -f /tmp/expo-modules-jsi.log ]; then
+              echo "--- ExpoModulesJSI ---"
+              (grep -E 'error:|fatal error|BUILD FAILED|did not produce|Swift tools|❌' /tmp/expo-modules-jsi.log || true) | tail -n 40
+              echo
+            fi
+            if [ -f /tmp/xcodebuild.log ]; then
+              echo "--- xcodebuild ---"
+              (grep -E 'error:|fatal error:|BUILD FAILED|Code Sign|Provisioning|package dependencies|ExpoModulesJSI|PhaseScriptExecution|Swift tools version|❌' /tmp/xcodebuild.log || true) | tail -n 60
+              echo '--- tail ---'
+              tail -n 40 /tmp/xcodebuild.log
+            fi
             echo '```'
           } > /tmp/build-comment.md
-          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment.md || true
+          # Keep comment under GitHub size limits
+          head -c 55000 /tmp/build-comment.md > /tmp/build-comment-trim.md
+          gh pr comment 1 --repo "${{ github.repository }}" --body-file /tmp/build-comment-trim.md || true
+          cat /tmp/build-comment-trim.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Package unsigned IPA
         run: |
