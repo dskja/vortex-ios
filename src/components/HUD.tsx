@@ -5,34 +5,28 @@ import { StyleSheet, Text, View } from 'react-native';
 import { COLORS } from '../game/constants';
 import type { GameSnapshot } from '../game/types';
 
-type Props = {
-  snap: GameSnapshot;
-};
-
-export function HUD({ snap }: Props) {
-  const [fontsLoaded] = useFonts({
-    Outfit_700Bold,
-    Outfit_600SemiBold,
-  });
+export function HUD({ snap }: { snap: GameSnapshot }) {
+  const [fontsLoaded] = useFonts({ Outfit_700Bold, Outfit_600SemiBold });
   if (snap.phase !== 'playing') return null;
-
-  const titleStyle = fontsLoaded
-    ? { fontFamily: 'Outfit_700Bold' as const }
-    : undefined;
-  const bodyStyle = fontsLoaded
-    ? { fontFamily: 'Outfit_600SemiBold' as const }
-    : undefined;
+  const title = fontsLoaded ? { fontFamily: 'Outfit_700Bold' as const } : undefined;
+  const body = fontsLoaded ? { fontFamily: 'Outfit_600SemiBold' as const } : undefined;
 
   return (
     <View style={styles.wrap} pointerEvents="none">
-      <Text style={[styles.score, titleStyle]}>{snap.score}</Text>
+      <Text style={[styles.score, title]}>{snap.score}</Text>
       {snap.combo > 1 && (
-        <Text style={[styles.combo, bodyStyle]}>
-          {snap.combo}x combo · ×{snap.multiplier.toFixed(2)}
+        <Text style={[styles.combo, body]}>
+          {snap.combo}x · ×{snap.multiplier.toFixed(2)}
         </Text>
       )}
-      {snap.lastPerfect && snap.flash > 0.4 && (
-        <Text style={[styles.perfect, bodyStyle]}>PERFECT</Text>
+      {snap.fever > 0 && <Text style={[styles.fever, body]}>FEVER</Text>}
+      {snap.mode === 'gauntlet' && (
+        <Text style={[styles.wave, body]}>
+          WAVE {Math.min(snap.wave, snap.wavesTotal)}/{snap.wavesTotal}
+        </Text>
+      )}
+      {snap.shardsEarned > 0 && (
+        <Text style={[styles.shards, body]}>◆ {snap.shardsEarned}</Text>
       )}
     </View>
   );
@@ -41,27 +35,25 @@ export function HUD({ snap }: Props) {
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    top: 64,
+    top: 58,
     left: 0,
     right: 0,
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
   },
-  score: {
-    color: COLORS.text,
-    fontSize: 42,
-    letterSpacing: -1,
-  },
+  score: { color: COLORS.text, fontSize: 44, letterSpacing: -1 },
   combo: {
     color: COLORS.accentSoft,
-    fontSize: 14,
+    fontSize: 13,
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
-  perfect: {
-    marginTop: 8,
-    color: COLORS.perfect,
-    fontSize: 16,
+  fever: {
+    color: COLORS.fever,
+    fontSize: 15,
     letterSpacing: 3,
+    marginTop: 4,
   },
+  wave: { color: COLORS.ring, fontSize: 12, letterSpacing: 1, marginTop: 2 },
+  shards: { color: COLORS.ring, fontSize: 12, marginTop: 2 },
 });
